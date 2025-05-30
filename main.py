@@ -3,7 +3,7 @@ import os
 import tempfile
 from fastapi import FastAPI, File, UploadFile, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from openai import AsyncOpenAI, APIError
+from openai import OpenAI, APIError
 from dotenv import load_dotenv
 from typing import Annotated # For FastAPI versions requiring Annotated for Body
 
@@ -71,8 +71,7 @@ app.add_middleware(
 # Initialize OpenAI client
 # The API key will be picked up from the OPENAI_API_KEY environment variable
 try:
-    api_key = os.getenv("OPENAI_API_KEY")
-    client = AsyncOpenAI(api_key=api_key)
+    client = OpenAI()
     # Test with a simple model listing to ensure API key is working (optional)
     # models = client.models.list()
     # print("OpenAI client initialized successfully.")
