@@ -1,11 +1,11 @@
 # main.py
 import os
 import tempfile
-from fastapi import FastAPI, File, UploadFile, HTTPException, Body
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI, APIError
 from dotenv import load_dotenv
-from typing import Annotated # For FastAPI versions requiring Annotated for Body
+import httpx # Import httpx
 
 # Import Pydantic models (if using a separate schemas.py)
 # from core.schemas import (
@@ -51,33 +51,34 @@ app = FastAPI(title="JournalAIse API")
 origins = [
     os.getenv("FRONTEND_URL_DEV", "http://localhost:3000"), # For local React dev server
     os.getenv("FRONTEND_URL_PROD"),                         # For your deployed Vercel frontend
-    # Add other origins if necessary
 ]
-# Filter out None values from origins if FRONTEND_URL_PROD is not set
-origins = [origin for origin in origins if origin]
-
-if not origins: # Fallback if no env vars are set, for very basic local testing
-    origins = ["http://localhost:3000"]
-
+origins = [origin for origin in origins if origin] # Filter out None values
+if not origins:
+    origins = ["http://localhost:3000"] # Fallback for basic local testing
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"], # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Initialize OpenAI client
-# The API key will be picked up from the OPENAI_API_KEY environment variable
+client = None # Initialize client as None
 try:
-    client = OpenAI()
-    # Test with a simple model listing to ensure API key is working (optional)
-    # models = client.models.list()
-    # print("OpenAI client initialized successfully.")
+    # Explicitly create an httpx.Client instance.
+    # httpx by default respects HTTP_PROXY/HTTPS_PROXY environment variables.
+    # If you don't want proxies, or need specific proxy settings:
+    # http_client_instance = httpx.Client(proxies=None, trust_env=False) # To disable proxies
+    # http_client_instance = httpx.Client(proxies="http://yourproxy:port") # To set a specific proxy
+    http_client_instance = httpx.Client() # Default behavior, respects env variables
+
+    client = OpenAI(http_client=http_client_instance)
+    print("OpenAI client initialized successfully using explicit httpx.Client.")
 except Exception as e:
     print(f"Error initializing OpenAI client: {e}")
-    client = None # Set to None if initialization fails
+    # client remains None, endpoints will check this
 
 # --- Helper Function for Error Handling ---
 def handle_openai_error(e: Exception, context: str = "OpenAI API call"):
@@ -96,7 +97,7 @@ async def home():
 @app.post('/api/transcribe-audio', response_model=AudioTranscriptionResponse, responses={500: {"model": ErrorResponse}})
 async def transcribe_audio_endpoint(audioFile: UploadFile = File(...)):
     if not client:
-        raise HTTPException(status_code=503, detail="OpenAI client not initialized.")
+        raise HTTPException(status_code=503, detail="OpenAI client not initialized. Check server logs.")
     if not audioFile:
         raise HTTPException(status_code=400, detail="No audio file provided")
     if audioFile.filename == '':
@@ -104,9 +105,7 @@ async def transcribe_audio_endpoint(audioFile: UploadFile = File(...)):
 
     tmp_audio_file_path = None
     try:
-        # Save the audio file temporarily
-        # Suffix should ideally match the file type, or convert it
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio_file: # Ensure suffix matches expected format or convert
             contents = await audioFile.read()
             tmp_audio_file.write(contents)
             tmp_audio_file_path = tmp_audio_file.name
@@ -119,8 +118,6 @@ async def transcribe_audio_endpoint(audioFile: UploadFile = File(...)):
         
         raw_transcription = transcript_response.text
 
-        # TODO: Implement actual broadcast-ready text correction with another GPT call
-        # This prompt should be refined for better results.
         correction_prompt = f"""
         Please correct the following raw audio transcription to make it suitable for a news broadcast.
         Focus on clarity, conciseness, removing filler words (like 'um', 'uh', 'like', 'you know'),
@@ -139,7 +136,7 @@ async def transcribe_audio_endpoint(audioFile: UploadFile = File(...)):
                 {"role": "system", "content": "You are an expert editor transforming raw audio transcriptions into polished, broadcast-ready text."},
                 {"role": "user", "content": correction_prompt}
             ],
-            model="gpt-3.5-turbo" # Or gpt-4 for higher quality
+            model="gpt-4"
         )
         broadcast_ready_text = broadcast_ready_completion.choices[0].message.content.strip()
 
@@ -147,7 +144,6 @@ async def transcribe_audio_endpoint(audioFile: UploadFile = File(...)):
             rawTranscription=raw_transcription,
             broadcastReadyText=broadcast_ready_text
         )
-
     except APIError as e:
         handle_openai_error(e, "audio transcription (OpenAI API)")
     except Exception as e:
@@ -155,7 +151,7 @@ async def transcribe_audio_endpoint(audioFile: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
     finally:
         if tmp_audio_file_path and os.path.exists(tmp_audio_file_path):
-            os.remove(tmp_audio_file_path) # Clean up the temporary file
+            os.remove(tmp_audio_file_path)
         if audioFile:
             await audioFile.close()
 
@@ -164,10 +160,9 @@ async def transcribe_audio_endpoint(audioFile: UploadFile = File(...)):
 @app.post('/api/correct-script', response_model=ScriptCorrectionResponse, responses={500: {"model": ErrorResponse}})
 async def correct_script_api(request_data: ScriptCorrectionRequest):
     if not client:
-        raise HTTPException(status_code=503, detail="OpenAI client not initialized.")
+        raise HTTPException(status_code=503, detail="OpenAI client not initialized. Check server logs.")
     
     original_text = request_data.text
-
     try:
         prompt_text = f"""
         You are an expert script editor for journalists.
@@ -179,10 +174,8 @@ async def correct_script_api(request_data: ScriptCorrectionRequest):
         ---
         {original_text}
         ---
-
         Corrected Script:
         """
-
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "You are an expert script editor for journalists."},
@@ -193,7 +186,7 @@ async def correct_script_api(request_data: ScriptCorrectionRequest):
         corrected_content = chat_completion.choices[0].message.content.strip()
         
         corrected_text_part = corrected_content
-        suggestions_part = None # Use None for optional field
+        suggestions_part = None
         if "Suggestions:" in corrected_content:
             parts = corrected_content.split("Suggestions:", 1)
             corrected_text_part = parts[0].strip()
@@ -214,27 +207,22 @@ async def correct_script_api(request_data: ScriptCorrectionRequest):
 @app.post('/api/generate-script', response_model=AIScriptWriterResponse, responses={500: {"model": ErrorResponse}})
 async def generate_script_api(request_data: AIScriptWriterRequest):
     if not client:
-        raise HTTPException(status_code=503, detail="OpenAI client not initialized.")
+        raise HTTPException(status_code=503, detail="OpenAI client not initialized. Check server logs.")
     
     topic = request_data.topic
-
     try:
         script_prompt = f"""
         You are an AI scriptwriter for a news/informational program called "JournalAIse: Insights Today".
         Generate a foundational script (approximately 200-300 words) for a segment on the following topic: {topic}.
-        The script should be engaging, informative, and suitable for a general audience.
-        Include:
-        - A brief introduction by a host.
-        - Key points or questions about the topic.
+        The script should be engaging, informative, and suitable for a general audience. Include:
+        - A brief introduction by a host. - Key points or questions about the topic.
         - Optionally, a placeholder for an expert's input or a visual element.
-        - A brief concluding remark by the host.
-        Format the script clearly, perhaps using "HOST:" or "EXPERT:" labels.
+        - A brief concluding remark by the host. Format the script clearly, perhaps using "HOST:" or "EXPERT:" labels.
         ---
         Topic: {topic}
         ---
         Generated Script:
         """
-
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "You are an AI scriptwriter for a news program."},
@@ -243,7 +231,6 @@ async def generate_script_api(request_data: AIScriptWriterRequest):
             model="gpt-3.5-turbo",
         )
         generated_script = chat_completion.choices[0].message.content.strip()
-
         return AIScriptWriterResponse(script=generated_script)
     except APIError as e:
         handle_openai_error(e, "AI script generation (OpenAI API)")
@@ -253,4 +240,3 @@ async def generate_script_api(request_data: AIScriptWriterRequest):
 
 # To run locally (for development):
 # uvicorn main:app --reload --port 8000
-# (Port 8000 is common for FastAPI, adjust if needed)
