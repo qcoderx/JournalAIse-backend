@@ -230,20 +230,22 @@ async def generate_script_api(request_data: AIScriptWriterRequest):
 
     try:
         script_prompt = f"""
-        You are an AI scriptwriter for a news/informational program called "JournalAIse: Insights Today".
-        Generate a foundational script (approximately 200-300 words) for a segment on the following topic: {topic}.
-        The script should be engaging, informative, and suitable for a general audience.
-        Include:
-        - A brief introduction by a host.
-        - Key points or questions about the topic.
-        - Optionally, a placeholder for an expert's input or a visual element if it fits naturally.
-        - A brief concluding remark by the host.
-        Format the script clearly, using "HOST:" or other appropriate labels for speakers if you introduce more than one.
-        Focus on providing a well-structured and coherent starting point.
+        You are an AI content writer specializing in creating detailed, well-researched, and informative articles.
+        Write an extensive article on the following topic. The article should be at least 500-700 words.
+
+        The article must be formatted as follows:
+        1. The main title of the article should be the topic itself, in bold.
+        2. Immediately under the bolded title, include the byline: "By [Your Name]"
+
+        Ensure the article is well-structured with clear paragraphs. You can use subheadings if it helps organize the content for a long article.
+        The tone should be informative and engaging for a general audience interested in learning more about the topic.
+        Provide comprehensive coverage of the topic.
+
         ---
         Topic: {topic}
         ---
-        Generated Script:
+
+        Article:
         """
 
         chat_completion = client.chat.completions.create(
